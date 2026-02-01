@@ -88,8 +88,7 @@ function ReplayContent({ runFriendlyId, failedRedirect }: ReplayRunDialogProps) 
       }
 
       queueFetcher.load(
-        `/resources/orgs/${params.organizationSlug}/projects/${
-          params.projectParam
+        `/resources/orgs/${params.organizationSlug}/projects/${params.projectParam
         }/env/${envSlug}/queues?${searchParams.toString()}`
       );
     }
@@ -165,7 +164,11 @@ function ReplayForm({
 
   const editablePayload =
     replayData.payloadType === "application/json" ||
-    replayData.payloadType === "application/super+json";
+    replayData.payloadType === "application/super+json" ||
+    replayData.payloadType === "text/plain";
+
+  // Only application/store (offloaded large payloads) are non-editable
+  const isLargePayload = replayData.payloadType === "application/store";
 
   const [tab, setTab] = useState<"payload" | "metadata">(editablePayload ? "payload" : "metadata");
 
@@ -271,7 +274,7 @@ function ReplayForm({
                       >
                         Payload
                       </TabButton>
-                      {!editablePayload && (
+                      {isLargePayload && (
                         <InfoIconTooltip
                           content={
                             <span className="text-sm">
