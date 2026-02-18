@@ -928,7 +928,6 @@ export class SharedQueueConsumer {
               machine,
               nextAttemptNumber,
               // identifiers
-              id: "placeholder", // TODO: Remove this completely in a future release
               envId: lockedTaskRun.runtimeEnvironment.id,
               envType: lockedTaskRun.runtimeEnvironment.type,
               orgId: lockedTaskRun.runtimeEnvironment.organizationId,

@@ -57,11 +57,53 @@ server.tool(
         }
       })
       .describe("The payload to pass to the task run, must be a valid JSON"),
-    // TODO: expose more parameteres from the trigger options
+    delay: z
+      .string()
+      .optional()
+      .describe("Delay before the task run starts, e.g. '1m', '30s', '2h', or an ISO 8601 date"),
+    ttl: z
+      .union([z.string(), z.number()])
+      .optional()
+      .describe(
+        "Time-to-live: how long the run remains valid before it starts, e.g. '1h' or seconds as a number"
+      ),
+    tags: z
+      .array(z.string())
+      .optional()
+      .describe("Tags to attach to the task run for filtering and organization"),
+    queue: z.string().optional().describe("The queue name to use for this task run"),
+    maxAttempts: z
+      .number()
+      .int()
+      .optional()
+      .describe("Maximum number of retry attempts for this task run"),
+    idempotencyKey: z
+      .string()
+      .optional()
+      .describe("Idempotency key for deduplication of task runs"),
+    concurrencyKey: z
+      .string()
+      .optional()
+      .describe("Concurrency key for controlling concurrent execution"),
+    priority: z.number().optional().describe("Priority of the task run (higher = more priority)"),
+    test: z.boolean().optional().describe("Whether this is a test run"),
   },
-  async ({ id, payload }) => {
+  async ({ id, payload, delay, ttl, tags, queue, maxAttempts, idempotencyKey, concurrencyKey, priority, test }) => {
+    const options: Record<string, unknown> = {};
+
+    if (delay !== undefined) options.delay = delay;
+    if (ttl !== undefined) options.ttl = ttl;
+    if (tags !== undefined) options.tags = tags;
+    if (queue !== undefined) options.queue = { name: queue };
+    if (maxAttempts !== undefined) options.maxAttempts = maxAttempts;
+    if (idempotencyKey !== undefined) options.idempotencyKey = idempotencyKey;
+    if (concurrencyKey !== undefined) options.concurrencyKey = concurrencyKey;
+    if (priority !== undefined) options.priority = priority;
+    if (test !== undefined) options.test = test;
+
     const result = await sdkApiClient.triggerTask(id, {
       payload,
+      options: Object.keys(options).length > 0 ? options : undefined,
     });
 
     const taskRunUrl = `${dashboardUrl}/projects/v3/${projectRef}/runs/${result.id}`;

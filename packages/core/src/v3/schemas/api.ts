@@ -6,7 +6,12 @@ import {
   MachinePresetName,
   SerializedError,
   TaskRunError,
+  TaskEventKindSchema,
+  TaskEventLevelSchema,
+  TaskEventStatusSchema,
 } from "./common.js";
+import { TaskEventStyle } from "./style.js";
+
 import { BackgroundWorkerMetadata } from "./resources.js";
 import { DequeuedMessage, MachineResources } from "./runEngine.js";
 
@@ -1597,3 +1602,31 @@ export const AppendToStreamResponseBody = z.object({
   message: z.string().optional(),
 });
 export type AppendToStreamResponseBody = z.infer<typeof AppendToStreamResponseBody>;
+
+export const TaskEventSchema = z.object({
+  id: z.string(),
+  runId: z.string(),
+  traceId: z.string(),
+  spanId: z.string(),
+  parentId: z.string().nullish(),
+  message: z.string(),
+  kind: TaskEventKindSchema,
+  level: TaskEventLevelSchema,
+  status: TaskEventStatusSchema,
+  startTime: z.coerce.date(),
+  duration: z.number(),
+  isError: z.boolean(),
+  isCancelled: z.boolean(),
+  properties: z.record(z.unknown()).optional(),
+  metadata: z.record(z.unknown()).optional(),
+  style: TaskEventStyle.optional(),
+});
+
+export type TaskEventSchema = z.infer<typeof TaskEventSchema>;
+
+export const RunEventsResponseSchema = z.object({
+  events: z.array(TaskEventSchema),
+});
+
+export type RunEventsResponseSchema = z.infer<typeof RunEventsResponseSchema>;
+

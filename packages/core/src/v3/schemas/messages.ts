@@ -51,7 +51,6 @@ export const BackgroundWorkerServerMessages = z.discriminatedUnion("type", [
     machine: MachinePreset,
     nextAttemptNumber: z.number().optional(),
     // identifiers
-    id: z.string().optional(), // TODO: Remove this completely in a future release
     envId: z.string(),
     envType: EnvironmentType,
     orgId: z.string(),
