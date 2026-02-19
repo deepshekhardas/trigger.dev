@@ -37,7 +37,6 @@ export class StandardRunTimelineMetricsManager implements RunTimelineMetricsMana
     this._metrics = [];
   }
 
-  // TODO: handle this when processKeepAlive is enabled
   #seedMetricsFromEnvironment(isWarmStartOverride?: boolean) {
     const forkStartTime = getEnvVar("TRIGGER_PROCESS_FORK_START_TIME");
     const warmStart = getEnvVar("TRIGGER_WARM_START");
@@ -46,12 +45,21 @@ export class StandardRunTimelineMetricsManager implements RunTimelineMetricsMana
 
     if (typeof forkStartTime === "string" && !isWarmStart) {
       const forkStartTimeMs = parseInt(forkStartTime, 10);
+      const forkDuration = Date.now() - forkStartTimeMs;
+
+      // When processKeepAlive is enabled, the process is reused across multiple runs.
+      // The TRIGGER_PROCESS_FORK_START_TIME env var from the original cold start persists
+      // in the process environment and becomes stale. Skip registration if the fork time
+      // is unreasonably old (> 60s), which indicates a kept-alive process.
+      if (forkDuration > 60_000) {
+        return;
+      }
 
       this.registerMetric({
         name: "trigger.dev/start",
         event: "fork",
         attributes: {
-          duration: Date.now() - forkStartTimeMs,
+          duration: forkDuration,
         },
         timestamp: forkStartTimeMs,
       });
