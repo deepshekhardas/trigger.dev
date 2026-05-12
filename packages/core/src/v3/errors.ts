@@ -351,6 +351,11 @@ export function sanitizeError(error: TaskRunError): TaskRunError {
   }
 }
 
+/**
+ * Determines whether an error should trigger a retry attempt.
+ * Returns true for errors that are retriable under the user's retry policy.
+ * Non-retriable errors (like OOM, SIGKILL_TIMEOUT) will fail the run immediately.
+ */
 export function shouldRetryError(error: TaskRunError): boolean {
   switch (error.type) {
     case "INTERNAL_ERROR": {
@@ -419,6 +424,10 @@ export function shouldRetryError(error: TaskRunError): boolean {
   }
 }
 
+/**
+ * Checks if retry settings should be looked up for this error type.
+ * Some errors (like SIGSEGV, SIGTERM, uncaught exceptions) respect user retry config.
+ */
 export function shouldLookupRetrySettings(error: TaskRunError): boolean {
   switch (error.type) {
     case "INTERNAL_ERROR": {
@@ -448,6 +457,10 @@ export function shouldLookupRetrySettings(error: TaskRunError): boolean {
   }
 }
 
+/**
+ * Corrects error stack traces by normalizing file paths and removing noise.
+ * Used to make stack traces more readable in logs and error UI.
+ */
 export function correctErrorStackTrace(
   stackTrace: string,
   projectDir?: string,
