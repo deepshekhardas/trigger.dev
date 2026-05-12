@@ -199,6 +199,9 @@ export function truncateStack(stack: string | undefined): string {
   ].join("\n");
 }
 
+/**
+ * Truncates error messages that exceed MAX_MESSAGE_LENGTH to prevent OOM.
+ */
 export function truncateMessage(message: string | undefined): string {
   if (!message) return "";
   return message.length > MAX_MESSAGE_LENGTH
@@ -206,6 +209,10 @@ export function truncateMessage(message: string | undefined): string {
     : message;
 }
 
+/**
+ * Parses an unknown error into a TaskRunError structure.
+ * Handles InternalError, built-in Error, strings, and custom error objects.
+ */
 export function parseError(error: unknown): TaskRunError {
   if (isInternalError(error)) {
     return {
@@ -301,6 +308,10 @@ export function createJsonErrorObject(error: TaskRunError): SerializedError {
 }
 
 // Removes null characters and truncates oversized fields to prevent OOM
+/**
+ * Sanitizes TaskRunError by removing null bytes and truncating long fields.
+ * Used to clean errors before storage or transmission.
+ */
 export function sanitizeError(error: TaskRunError): TaskRunError {
   switch (error.type) {
     case "BUILT_IN_ERROR": {
@@ -503,6 +514,10 @@ function correctStackTraceLine(line: string, projectDir?: string, isDev?: boolea
   return line.trim();
 }
 
+/**
+ * Groups Zod validation issues by task index for better error reporting.
+ * Used when parsing task metadata fails.
+ */
 export function groupTaskMetadataIssuesByTask(tasks: any, issues: z.ZodIssue[]) {
   return issues.reduce(
     (acc, issue) => {
@@ -786,6 +801,10 @@ const findSignalInMessage = (message?: string, truncateLength = 100) => {
   }
 };
 
+/**
+ * Enhances TaskRunError with additional context like signals, OOM detection.
+ * Used to enrich errors before displaying or logging.
+ */
 export function taskRunErrorEnhancer(error: TaskRunError): EnhanceError<TaskRunError> {
   switch (error.type) {
     case "BUILT_IN_ERROR": {
