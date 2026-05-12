@@ -8,6 +8,10 @@ export type {
   ResolveEnvironmentVariablesResult,
 } from "@trigger.dev/core/v3";
 
+/**
+ * Validates and normalizes trigger configuration.
+ * Collapses maxComputeSeconds (new) and maxDuration (deprecated) into maxDuration.
+ */
 export function defineConfig(config: TriggerConfig): TriggerConfig {
   // `maxComputeSeconds` is the new name for `maxDuration`. If both are set, the new
   // name wins. Internally the SDK and platform still read `maxDuration`, so we
