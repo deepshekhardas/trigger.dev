@@ -11,9 +11,6 @@ import {
 
 const CreateRunReplicationServiceParams = z.object({
   name: z.string(),
-  keepAliveEnabled: z.boolean(),
-  keepAliveIdleSocketTtl: z.number(),
-  maxOpenConnections: z.number(),
   maxFlushConcurrency: z.number(),
   flushIntervalMs: z.number(),
   flushBatchSize: z.number(),

@@ -133,26 +133,27 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const from = fromStr ? parseInt(fromStr, 10) : undefined;
   const to = toStr ? parseInt(toStr, 10) : undefined;
 
-  // Get the user's plan to determine log retention limit
+// Get the user's plan to determine log retention limit
   const plan = await getCurrentPlan(project.organizationId);
   const retentionLimitDays = plan?.v3Subscription?.plan?.limits.logRetentionDays.number ?? 30;
 
-  const logsClickhouse = await clickhouseFactory.getClickhouseForOrganization(project.organizationId, "logs");
-  const presenter = new LogsListPresenter($replica, logsClickhouse);
-
-  const listPromise = presenter
-    .call(project.organizationId, environment.id, {
-      userId,
-      projectId: project.id,
-      tasks: tasks.length > 0 ? tasks : undefined,
-      runId,
-      search,
-      levels,
-      period,
-      from,
-      to,
-      defaultPeriod: "1h",
-      retentionLimitDays,
+  const listPromise = clickhouseFactory
+    .getClickhouseForOrganization(project.organizationId, "logs")
+    .then((logsClickhouse) => {
+      const presenter = new LogsListPresenter($replica, logsClickhouse);
+      return presenter.call(project.organizationId, environment.id, {
+        userId,
+        projectId: project.id,
+        tasks: tasks.length > 0 ? tasks : undefined,
+        runId,
+        search,
+        levels,
+        period,
+        from,
+        to,
+        defaultPeriod: "1h",
+        retentionLimitDays,
+      });
     })
     .catch((error) => {
       if (error instanceof ServiceValidationError) {
