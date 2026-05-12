@@ -1,10 +1,11 @@
-import { batch, logger, task, tasks, timeout, wait } from "@trigger.dev/sdk";
+import { batch, logger, task, tasks, timeout, wait, waitUntil } from "@trigger.dev/sdk";
 import { setTimeout } from "timers/promises";
 import { ResourceMonitor } from "../resourceMonitor.js";
 import { fixedLengthTask } from "./batches.js";
 
 export const helloWorldTask = task({
   id: "hello-world",
+  ttl: "10m",
   retry: {
     maxAttempts: 3,
     minTimeoutInMs: 500,
@@ -19,6 +20,10 @@ export const helloWorldTask = task({
     logger.info("env vars", {
       env: process.env,
     });
+
+    waitUntil((async () => {
+      logger.info("Hello, world from the waitUntil hook", { payload });
+    })());
 
     logger.debug("debug: Hello, worlds!", { payload });
     logger.info("info: Hello, world!", { payload });
@@ -134,7 +139,7 @@ export const maxDurationTask = task({
     maxTimeoutInMs: 2_000,
     factor: 1.4,
   },
-  maxDuration: 5,
+  maxComputeSeconds: 5,
   run: async (payload: { sleepFor: number }, { signal, ctx }) => {
     await setTimeout(payload.sleepFor * 1000, { signal });
   },
@@ -145,7 +150,7 @@ export const maxDurationParentTask = task({
   run: async (payload: { sleepFor?: number; maxDuration?: number }, { ctx, signal }) => {
     const result = await maxDurationTask.triggerAndWait(
       { sleepFor: payload.sleepFor ?? 10 },
-      { maxDuration: timeout.None }
+      { maxComputeSeconds: timeout.None }
     );
 
     return result;

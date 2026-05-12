@@ -10,7 +10,8 @@ export default defineConfig({
     maxExecutionsPerProcess: 20,
   },
   logLevel: "debug",
-  maxDuration: 3600,
+  maxComputeSeconds: 3600,
+  ttl: "1h",
   retries: {
     enabledInDev: true,
     default: {

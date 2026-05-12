@@ -15,6 +15,7 @@ export const links = {
     troubleshooting: {
       concurrentWaits: "https://trigger.dev/docs/troubleshooting#parallel-waits-are-not-supported",
       stalledExecution: "https://trigger.dev/docs/troubleshooting#task-run-stalled-executing",
+      uncaughtException: "https://trigger.dev/docs/troubleshooting#uncaught-exceptions",
     },
     concurrency: {
       recursiveDeadlock:
@@ -25,6 +26,7 @@ export const links = {
       personalAccessToken:
         "https://trigger.dev/docs/github-actions#creating-a-personal-access-token",
     },
+    maxDuration: "https://trigger.dev/docs/runs/max-duration",
   },
   site: {
     home: "https://trigger.dev",

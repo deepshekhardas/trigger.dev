@@ -31,6 +31,7 @@ import {
   TaskRunExecutionResult,
   TaskRunPromise,
 } from "@trigger.dev/core/v3";
+import { resolveMaxComputeSeconds } from "./maxComputeSeconds.js";
 import { tracer } from "./tracer.js";
 
 import type {
@@ -235,7 +236,8 @@ export function createTask<
     queue: params.queue,
     retry: params.retry ? { ...defaultRetryOptions, ...params.retry } : undefined,
     machine: typeof params.machine === "string" ? { preset: params.machine } : params.machine,
-    maxDuration: params.maxDuration,
+    maxDuration: resolveMaxComputeSeconds(params),
+    ttl: params.ttl,
     payloadSchema: params.jsonSchema,
     fns: {
       run: params.run,
@@ -366,7 +368,8 @@ export function createSchemaTask<
     queue: params.queue,
     retry: params.retry ? { ...defaultRetryOptions, ...params.retry } : undefined,
     machine: typeof params.machine === "string" ? { preset: params.machine } : params.machine,
-    maxDuration: params.maxDuration,
+    maxDuration: resolveMaxComputeSeconds(params),
+    ttl: params.ttl,
     fns: {
       run: params.run,
       parsePayload,
@@ -641,7 +644,7 @@ export async function batchTriggerById<TTask extends AnyTask>(
             tags: item.options?.tags,
             maxAttempts: item.options?.maxAttempts,
             metadata: item.options?.metadata,
-            maxDuration: item.options?.maxDuration,
+            maxDuration: item.options ? resolveMaxComputeSeconds(item.options) : undefined,
             idempotencyKey:
               (await makeIdempotencyKey(item.options?.idempotencyKey)) ?? batchItemIdempotencyKey,
             idempotencyKeyTTL: item.options?.idempotencyKeyTTL ?? options?.idempotencyKeyTTL,
@@ -898,7 +901,7 @@ export async function batchTriggerByIdAndWait<TTask extends AnyTask>(
             tags: item.options?.tags,
             maxAttempts: item.options?.maxAttempts,
             metadata: item.options?.metadata,
-            maxDuration: item.options?.maxDuration,
+            maxDuration: item.options ? resolveMaxComputeSeconds(item.options) : undefined,
             idempotencyKey:
               (await makeIdempotencyKey(item.options?.idempotencyKey)) ?? batchItemIdempotencyKey,
             idempotencyKeyTTL: item.options?.idempotencyKeyTTL ?? options?.idempotencyKeyTTL,
@@ -936,7 +939,7 @@ export async function batchTriggerByIdAndWait<TTask extends AnyTask>(
           ctx,
         });
 
-        const runs = await handleBatchTaskRunExecutionResultV2(result.items);
+        const runs = await handleBatchTaskRunExecutionResultV2(result.items, response.taskIdentifiers);
 
         return {
           id: result.id,
@@ -980,7 +983,7 @@ export async function batchTriggerByIdAndWait<TTask extends AnyTask>(
           ctx,
         });
 
-        const runs = await handleBatchTaskRunExecutionResultV2(result.items);
+        const runs = await handleBatchTaskRunExecutionResultV2(result.items, response.taskIdentifiers);
 
         return {
           id: result.id,
@@ -1157,7 +1160,7 @@ export async function batchTriggerTasks<TTasks extends readonly AnyTask[]>(
             tags: item.options?.tags,
             maxAttempts: item.options?.maxAttempts,
             metadata: item.options?.metadata,
-            maxDuration: item.options?.maxDuration,
+            maxDuration: item.options ? resolveMaxComputeSeconds(item.options) : undefined,
             idempotencyKey:
               (await makeIdempotencyKey(item.options?.idempotencyKey)) ?? batchItemIdempotencyKey,
             idempotencyKeyTTL: item.options?.idempotencyKeyTTL ?? options?.idempotencyKeyTTL,
@@ -1419,7 +1422,7 @@ export async function batchTriggerAndWaitTasks<TTasks extends readonly AnyTask[]
             tags: item.options?.tags,
             maxAttempts: item.options?.maxAttempts,
             metadata: item.options?.metadata,
-            maxDuration: item.options?.maxDuration,
+            maxDuration: item.options ? resolveMaxComputeSeconds(item.options) : undefined,
             idempotencyKey:
               (await makeIdempotencyKey(item.options?.idempotencyKey)) ?? batchItemIdempotencyKey,
             idempotencyKeyTTL: item.options?.idempotencyKeyTTL ?? options?.idempotencyKeyTTL,
@@ -1457,7 +1460,7 @@ export async function batchTriggerAndWaitTasks<TTasks extends readonly AnyTask[]
           ctx,
         });
 
-        const runs = await handleBatchTaskRunExecutionResultV2(result.items);
+        const runs = await handleBatchTaskRunExecutionResultV2(result.items, response.taskIdentifiers);
 
         return {
           id: result.id,
@@ -1504,7 +1507,7 @@ export async function batchTriggerAndWaitTasks<TTasks extends readonly AnyTask[]
           ctx,
         });
 
-        const runs = await handleBatchTaskRunExecutionResultV2(result.items);
+        const runs = await handleBatchTaskRunExecutionResultV2(result.items, response.taskIdentifiers);
 
         return {
           id: result.id,
@@ -1545,7 +1548,7 @@ async function executeBatchTwoPhase(
     spanParentAsLink?: boolean;
   },
   requestOptions?: TriggerApiRequestOptions
-): Promise<{ id: string; runCount: number; publicAccessToken: string }> {
+): Promise<{ id: string; runCount: number; publicAccessToken: string; taskIdentifiers: string[] }> {
   let batch: Awaited<ReturnType<typeof apiClient.createBatch>> | undefined;
 
   try {
@@ -1588,6 +1591,7 @@ async function executeBatchTwoPhase(
     id: batch.id,
     runCount: batch.runCount,
     publicAccessToken: batch.publicAccessToken,
+    taskIdentifiers: items.map((item) => item.task),
   };
 }
 
@@ -1703,7 +1707,7 @@ async function executeBatchTwoPhaseStreaming(
     spanParentAsLink?: boolean;
   },
   requestOptions?: TriggerApiRequestOptions
-): Promise<{ id: string; runCount: number; publicAccessToken: string }> {
+): Promise<{ id: string; runCount: number; publicAccessToken: string; taskIdentifiers: string[] }> {
   // For streaming, we need to buffer items to get the count first
   // This is because createBatch requires runCount upfront
   // In the future, we could add a streaming-first endpoint that doesn't require this
@@ -1820,7 +1824,7 @@ async function* transformBatchItemsStream<TTask extends AnyTask>(
         tags: item.options?.tags,
         maxAttempts: item.options?.maxAttempts,
         metadata: item.options?.metadata,
-        maxDuration: item.options?.maxDuration,
+        maxDuration: item.options ? resolveMaxComputeSeconds(item.options) : undefined,
         idempotencyKey:
           (await makeIdempotencyKey(item.options?.idempotencyKey)) ?? batchItemIdempotencyKey,
         idempotencyKeyTTL: item.options?.idempotencyKeyTTL ?? options?.idempotencyKeyTTL,
@@ -1873,7 +1877,7 @@ async function* transformBatchItemsStreamForWait<TTask extends AnyTask>(
         tags: item.options?.tags,
         maxAttempts: item.options?.maxAttempts,
         metadata: item.options?.metadata,
-        maxDuration: item.options?.maxDuration,
+        maxDuration: item.options ? resolveMaxComputeSeconds(item.options) : undefined,
         idempotencyKey:
           (await makeIdempotencyKey(item.options?.idempotencyKey)) ?? batchItemIdempotencyKey,
         idempotencyKeyTTL: item.options?.idempotencyKeyTTL ?? options?.idempotencyKeyTTL,
@@ -1923,7 +1927,7 @@ async function* transformBatchByTaskItemsStream<TTasks extends readonly AnyTask[
         tags: item.options?.tags,
         maxAttempts: item.options?.maxAttempts,
         metadata: item.options?.metadata,
-        maxDuration: item.options?.maxDuration,
+        maxDuration: item.options ? resolveMaxComputeSeconds(item.options) : undefined,
         idempotencyKey:
           (await makeIdempotencyKey(item.options?.idempotencyKey)) ?? batchItemIdempotencyKey,
         idempotencyKeyTTL: item.options?.idempotencyKeyTTL ?? options?.idempotencyKeyTTL,
@@ -1975,7 +1979,7 @@ async function* transformBatchByTaskItemsStreamForWait<TTasks extends readonly A
         tags: item.options?.tags,
         maxAttempts: item.options?.maxAttempts,
         metadata: item.options?.metadata,
-        maxDuration: item.options?.maxDuration,
+        maxDuration: item.options ? resolveMaxComputeSeconds(item.options) : undefined,
         idempotencyKey:
           (await makeIdempotencyKey(item.options?.idempotencyKey)) ?? batchItemIdempotencyKey,
         idempotencyKeyTTL: item.options?.idempotencyKeyTTL ?? options?.idempotencyKeyTTL,
@@ -2027,7 +2031,7 @@ async function* transformSingleTaskBatchItemsStream<TPayload>(
         tags: item.options?.tags,
         maxAttempts: item.options?.maxAttempts,
         metadata: item.options?.metadata,
-        maxDuration: item.options?.maxDuration,
+        maxDuration: item.options ? resolveMaxComputeSeconds(item.options) : undefined,
         idempotencyKey:
           (await makeIdempotencyKey(item.options?.idempotencyKey)) ?? batchItemIdempotencyKey,
         idempotencyKeyTTL: item.options?.idempotencyKeyTTL ?? options?.idempotencyKeyTTL,
@@ -2088,7 +2092,7 @@ async function* transformSingleTaskBatchItemsStreamForWait<TPayload>(
         tags: item.options?.tags,
         maxAttempts: item.options?.maxAttempts,
         metadata: item.options?.metadata,
-        maxDuration: item.options?.maxDuration,
+        maxDuration: item.options ? resolveMaxComputeSeconds(item.options) : undefined,
         idempotencyKey: finalIdempotencyKey?.toString(),
         idempotencyKeyTTL: item.options?.idempotencyKeyTTL ?? options?.idempotencyKeyTTL,
         idempotencyKeyOptions,
@@ -2138,7 +2142,7 @@ async function trigger_internal<TRunTypes extends AnyRunTypes>(
         tags: options?.tags,
         maxAttempts: options?.maxAttempts,
         metadata: options?.metadata,
-        maxDuration: options?.maxDuration,
+        maxDuration: options ? resolveMaxComputeSeconds(options) : undefined,
         parentRunId: taskContext.ctx?.run.id,
         machine: options?.machine,
         priority: options?.priority,
@@ -2222,7 +2226,7 @@ async function batchTrigger_internal<TRunTypes extends AnyRunTypes>(
             tags: item.options?.tags,
             maxAttempts: item.options?.maxAttempts,
             metadata: item.options?.metadata,
-            maxDuration: item.options?.maxDuration,
+            maxDuration: item.options ? resolveMaxComputeSeconds(item.options) : undefined,
             idempotencyKey: finalIdempotencyKey?.toString(),
             idempotencyKeyTTL: item.options?.idempotencyKeyTTL ?? options?.idempotencyKeyTTL,
             idempotencyKeyOptions,
@@ -2395,7 +2399,7 @@ async function triggerAndWait_internal<TIdentifier extends string, TPayload, TOu
             tags: options?.tags,
             maxAttempts: options?.maxAttempts,
             metadata: options?.metadata,
-            maxDuration: options?.maxDuration,
+            maxDuration: options ? resolveMaxComputeSeconds(options) : undefined,
             resumeParentOnCompletion: true,
             parentRunId: ctx.run.id,
             idempotencyKey: processedIdempotencyKey?.toString(),
@@ -2497,7 +2501,7 @@ async function batchTriggerAndWait_internal<TIdentifier extends string, TPayload
             tags: item.options?.tags,
             maxAttempts: item.options?.maxAttempts,
             metadata: item.options?.metadata,
-            maxDuration: item.options?.maxDuration,
+            maxDuration: item.options ? resolveMaxComputeSeconds(item.options) : undefined,
             idempotencyKey: finalIdempotencyKey?.toString(),
             idempotencyKeyTTL: item.options?.idempotencyKeyTTL ?? options?.idempotencyKeyTTL,
             idempotencyKeyOptions,
@@ -2676,7 +2680,8 @@ async function handleBatchTaskRunExecutionResult<TIdentifier extends string, TOu
 }
 
 async function handleBatchTaskRunExecutionResultV2(
-  items: Array<TaskRunExecutionResult>
+  items: Array<TaskRunExecutionResult>,
+  taskIdentifiers?: string[]
 ): Promise<Array<AnyTaskRunResult>> {
   const someObjectStoreOutputs = items.some(
     (item) => item.ok && item.outputType === "application/store"
@@ -2684,8 +2689,11 @@ async function handleBatchTaskRunExecutionResultV2(
 
   if (!someObjectStoreOutputs) {
     const results = await Promise.all(
-      items.map(async (item) => {
-        return await handleTaskRunExecutionResult(item, item.taskIdentifier ?? "unknown");
+      items.map(async (item, index) => {
+        return await handleTaskRunExecutionResult(
+          item,
+          item.taskIdentifier ?? taskIdentifiers?.[index] ?? "unknown"
+        );
       })
     );
 
@@ -2696,8 +2704,11 @@ async function handleBatchTaskRunExecutionResultV2(
     "store.downloadPayloads",
     async (span) => {
       const results = await Promise.all(
-        items.map(async (item) => {
-          return await handleTaskRunExecutionResult(item, item.taskIdentifier ?? "unknown");
+        items.map(async (item, index) => {
+          return await handleTaskRunExecutionResult(
+            item,
+            item.taskIdentifier ?? taskIdentifiers?.[index] ?? "unknown"
+          );
         })
       );
 

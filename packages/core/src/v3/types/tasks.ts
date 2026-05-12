@@ -21,6 +21,7 @@ import {
   MachineMemory,
   MachinePresetName,
   RetryOptions,
+  PromptMetadata,
   TaskMetadata,
   TaskRunContext,
 } from "../schemas/index.js";
@@ -271,11 +272,43 @@ type CommonTaskOptions<
     | MachinePresetName;
 
   /**
+   * The maximum duration in compute-time **seconds** that a task run is allowed to run. If the task run exceeds this duration, it will be stopped.
+   *
+   * Minimum value is 5 seconds.
+   */
+  maxComputeSeconds?: number;
+
+  /**
    * The maximum duration in compute-time seconds that a task run is allowed to run. If the task run exceeds this duration, it will be stopped.
    *
    * Minimum value is 5 seconds
+   *
+   * @deprecated Use `maxComputeSeconds` instead — same semantics, clearer unit. If both are set, `maxComputeSeconds` wins.
    */
   maxDuration?: number;
+
+  /**
+   * Set a default time-to-live for runs of this task. If the run is not executed within this time, it will be removed from the queue and never execute.
+   *
+   * This can be a string like "1h" (1 hour), "30m" (30 minutes), "1d" (1 day), or a number of seconds.
+   *
+   * If omitted it will use the value in your `trigger.config.ts` file, if set.
+   *
+   * You can override this on a per-trigger basis by setting the `ttl` option when triggering the task.
+   *
+   * @example
+   *
+   * ```ts
+   * export const myTask = task({
+   *   id: "my-task",
+   *   ttl: "10m",
+   *   run: async (payload) => {
+   *     //...
+   *   },
+   * });
+   * ```
+   */
+  ttl?: string | number;
 
   /** This gets called when a task is triggered. It's where you put the code you want to execute.
    *
@@ -853,11 +886,22 @@ export type TriggerOptions = {
   metadata?: Record<string, SerializableJson>;
 
   /**
+   * The maximum duration in compute-time **seconds** that a task run is allowed to run. If the task run exceeds this duration, it will be stopped.
+   *
+   * This will override the task's `maxComputeSeconds` (or the legacy `maxDuration`).
+   *
+   * Minimum value is 5 seconds.
+   */
+  maxComputeSeconds?: number;
+
+  /**
    * The maximum duration in compute-time seconds that a task run is allowed to run. If the task run exceeds this duration, it will be stopped.
    *
    * This will override the task's maxDuration.
    *
    * Minimum value is 5 seconds
+   *
+   * @deprecated Use `maxComputeSeconds` instead — same semantics, clearer unit. If both are set, `maxComputeSeconds` wins.
    */
   maxDuration?: number;
 
@@ -1004,6 +1048,13 @@ export type TaskMetadataWithFunctions = TaskMetadata & {
     onStart?: (payload: any, params: StartFnParams) => Promise<void>;
     onStartAttempt?: (payload: any, params: StartAttemptFnParams) => Promise<void>;
     parsePayload?: AnySchemaParseFn;
+  };
+  schema?: TaskSchema;
+};
+
+export type PromptMetadataWithFunctions = PromptMetadata & {
+  fns: {
+    resolve: (variables: Record<string, unknown>) => Promise<unknown>;
   };
   schema?: TaskSchema;
 };
