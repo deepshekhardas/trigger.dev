@@ -154,13 +154,72 @@ export function isCompleteTaskWithOutput(error: unknown): error is CompleteTaskW
   return error instanceof Error && error.name === "CompleteTaskWithOutput";
 }
 
+const MAX_STACK_FRAMES = 50;
+const KEEP_TOP_FRAMES = 5;
+const MAX_STACK_LINE_LENGTH = 1024;
+const MAX_MESSAGE_LENGTH = 1_000;
+
+/** Truncate a stack trace to at most MAX_STACK_FRAMES frames, keeping
+ *  the top (closest to throw) and bottom (entry points) frames.
+ *  Individual lines (including message lines) are capped at MAX_STACK_LINE_LENGTH
+ *  to prevent OOM from huge error messages embedded in the stack. */
+export function truncateStack(stack: string | undefined): string {
+  if (!stack) return "";
+
+  const lines = stack.split("\n");
+
+  // First line(s) before the first frame are the error message
+  const messageLines: string[] = [];
+  const frameLines: string[] = [];
+
+  for (const line of lines) {
+    const safe =
+      line.length > MAX_STACK_LINE_LENGTH
+        ? line.slice(0, MAX_STACK_LINE_LENGTH) + "...[truncated]"
+        : line;
+    if (frameLines.length === 0 && !line.trimStart().startsWith("at ")) {
+      messageLines.push(safe);
+    } else {
+      frameLines.push(safe);
+    }
+  }
+
+  if (frameLines.length <= MAX_STACK_FRAMES) {
+    return [...messageLines, ...frameLines].join("\n");
+  }
+
+  const keepBottom = MAX_STACK_FRAMES - KEEP_TOP_FRAMES;
+  const omitted = frameLines.length - MAX_STACK_FRAMES;
+
+  return [
+    ...messageLines,
+    ...frameLines.slice(0, KEEP_TOP_FRAMES),
+    `    ... ${omitted} frames omitted ...`,
+    ...frameLines.slice(-keepBottom),
+  ].join("\n");
+}
+
+/**
+ * Truncates error messages that exceed MAX_MESSAGE_LENGTH to prevent OOM.
+ */
+export function truncateMessage(message: string | undefined): string {
+  if (!message) return "";
+  return message.length > MAX_MESSAGE_LENGTH
+    ? message.slice(0, MAX_MESSAGE_LENGTH) + "...[truncated]"
+    : message;
+}
+
+/**
+ * Parses an unknown error into a TaskRunError structure.
+ * Handles InternalError, built-in Error, strings, and custom error objects.
+ */
 export function parseError(error: unknown): TaskRunError {
   if (isInternalError(error)) {
     return {
       type: "INTERNAL_ERROR",
       code: error.code,
-      message: error.message,
-      stackTrace: error.stack ?? "",
+      message: truncateMessage(error.message),
+      stackTrace: truncateStack(error.stack),
     };
   }
 
@@ -168,8 +227,8 @@ export function parseError(error: unknown): TaskRunError {
     return {
       type: "BUILT_IN_ERROR",
       name: error.name,
-      message: error.message,
-      stackTrace: error.stack ?? "",
+      message: truncateMessage(error.message),
+      stackTrace: truncateStack(error.stack),
     };
   }
 
@@ -248,40 +307,66 @@ export function createJsonErrorObject(error: TaskRunError): SerializedError {
   }
 }
 
-// Removes any null characters from the error message
+// Removes null characters and truncates oversized fields to prevent OOM
+/**
+ * Sanitizes TaskRunError by removing null bytes and truncating long fields.
+ * Used to clean errors before storage or transmission.
+ */
 export function sanitizeError(error: TaskRunError): TaskRunError {
   switch (error.type) {
     case "BUILT_IN_ERROR": {
       return {
         type: "BUILT_IN_ERROR",
-        message: error.message?.replace(/\0/g, ""),
+        message: truncateMessage(error.message?.replace(/\0/g, "")),
         name: error.name?.replace(/\0/g, ""),
-        stackTrace: error.stackTrace?.replace(/\0/g, ""),
+        stackTrace: truncateStack(error.stackTrace?.replace(/\0/g, "")),
       };
     }
     case "STRING_ERROR": {
       return {
         type: "STRING_ERROR",
-        raw: error.raw.replace(/\0/g, ""),
+        raw: truncateMessage(error.raw.replace(/\0/g, "")),
       };
     }
     case "CUSTOM_ERROR": {
+      // CUSTOM_ERROR.raw holds JSON.stringify(error) which is later parsed by
+      // JSON.parse in createErrorTaskError. Naive truncation would cut mid-token
+      // and produce invalid JSON — wrap the preview in a valid JSON envelope.
+      const clean = error.raw.replace(/\0/g, "");
+      const safeRaw =
+        clean.length > MAX_MESSAGE_LENGTH
+          ? JSON.stringify({ truncated: true, preview: clean.slice(0, MAX_MESSAGE_LENGTH) })
+          : clean;
       return {
         type: "CUSTOM_ERROR",
-        raw: error.raw.replace(/\0/g, ""),
+        raw: safeRaw,
       };
     }
     case "INTERNAL_ERROR": {
+      // message and stackTrace are optional for INTERNAL_ERROR — preserve
+      // `undefined` so the `error.message ?? "Internal error (CODE)"` fallback
+      // in createErrorTaskError still kicks in (empty string is not nullish).
       return {
         type: "INTERNAL_ERROR",
         code: error.code,
-        message: error.message?.replace(/\0/g, ""),
-        stackTrace: error.stackTrace?.replace(/\0/g, ""),
+        message:
+          error.message != null
+            ? truncateMessage(error.message.replace(/\0/g, ""))
+            : undefined,
+        stackTrace:
+          error.stackTrace != null
+            ? truncateStack(error.stackTrace.replace(/\0/g, ""))
+            : undefined,
       };
     }
   }
 }
 
+/**
+ * Determines whether an error should trigger a retry attempt.
+ * Returns true for errors that are retriable under the user's retry policy.
+ * Non-retriable errors (like OOM, SIGKILL_TIMEOUT) will fail the run immediately.
+ */
 export function shouldRetryError(error: TaskRunError): boolean {
   switch (error.type) {
     case "INTERNAL_ERROR": {
@@ -292,7 +377,6 @@ export function shouldRetryError(error: TaskRunError): boolean {
         case "CONFIGURED_INCORRECTLY":
         case "TASK_ALREADY_RUNNING":
         case "TASK_PROCESS_SIGKILL_TIMEOUT":
-        case "TASK_PROCESS_SIGSEGV":
         case "TASK_PROCESS_OOM_KILLED":
         case "TASK_PROCESS_MAYBE_OOM_KILLED":
         case "TASK_RUN_CANCELLED":
@@ -307,6 +391,9 @@ export function shouldRetryError(error: TaskRunError): boolean {
         case "TASK_DEQUEUED_QUEUE_NOT_FOUND":
         case "TASK_HAS_N0_EXECUTION_SNAPSHOT":
         case "TASK_RUN_DEQUEUED_MAX_RETRIES":
+        case "BATCH_ITEM_COULD_NOT_TRIGGER":
+        case "PAYLOAD_TOO_LARGE":
+        case "UNSPECIFIED_ERROR":
           return false;
 
         //new heartbeat error
@@ -323,8 +410,10 @@ export function shouldRetryError(error: TaskRunError): boolean {
         case "TASK_EXECUTION_ABORTED":
         case "TASK_EXECUTION_FAILED":
         case "TASK_RUN_CRASHED":
+        case "TASK_RUN_UNCAUGHT_EXCEPTION":
         case "TASK_PROCESS_EXITED_WITH_NON_ZERO_CODE":
         case "TASK_PROCESS_SIGTERM":
+        case "TASK_PROCESS_SIGSEGV":
           return true;
 
         default:
@@ -346,6 +435,10 @@ export function shouldRetryError(error: TaskRunError): boolean {
   }
 }
 
+/**
+ * Checks if retry settings should be looked up for this error type.
+ * Some errors (like SIGSEGV, SIGTERM, uncaught exceptions) respect user retry config.
+ */
 export function shouldLookupRetrySettings(error: TaskRunError): boolean {
   switch (error.type) {
     case "INTERNAL_ERROR": {
@@ -353,6 +446,7 @@ export function shouldLookupRetrySettings(error: TaskRunError): boolean {
         case "TASK_PROCESS_EXITED_WITH_NON_ZERO_CODE":
         case "TASK_PROCESS_SIGTERM":
         case "TASK_PROCESS_SIGSEGV":
+        case "TASK_RUN_UNCAUGHT_EXCEPTION":
           return true;
 
         default:
@@ -374,6 +468,10 @@ export function shouldLookupRetrySettings(error: TaskRunError): boolean {
   }
 }
 
+/**
+ * Corrects error stack traces by normalizing file paths and removing noise.
+ * Used to make stack traces more readable in logs and error UI.
+ */
 export function correctErrorStackTrace(
   stackTrace: string,
   projectDir?: string,
@@ -416,6 +514,10 @@ function correctStackTraceLine(line: string, projectDir?: string, isDev?: boolea
   return line.trim();
 }
 
+/**
+ * Groups Zod validation issues by task index for better error reporting.
+ * Used when parsing task metadata fails.
+ */
 export function groupTaskMetadataIssuesByTask(tasks: any, issues: z.ZodIssue[]) {
   return issues.reduce(
     (acc, issue) => {
@@ -650,6 +752,18 @@ const prettyInternalErrors: Partial<
       href: links.docs.troubleshooting.stalledExecution,
     },
   },
+  // Link only — we deliberately do NOT set `message`, so the original
+  // error message (e.g. "read ECONNRESET") is preserved in the dashboard.
+  // Common cause: an EventEmitter (node-redis, pg, etc.) emitted "error"
+  // with no listener attached, which Node escalates to uncaughtException.
+  // The docs page explains how to attach .on("error") listeners and how
+  // unhandled rejections route through the same path.
+  TASK_RUN_UNCAUGHT_EXCEPTION: {
+    link: {
+      name: "Read our troubleshooting guide",
+      href: links.docs.troubleshooting.uncaughtException,
+    },
+  },
 };
 
 const getPrettyTaskRunError = (code: TaskRunInternalError["code"]): TaskRunInternalError => {
@@ -687,6 +801,10 @@ const findSignalInMessage = (message?: string, truncateLength = 100) => {
   }
 };
 
+/**
+ * Enhances TaskRunError with additional context like signals, OOM detection.
+ * Used to enrich errors before displaying or logging.
+ */
 export function taskRunErrorEnhancer(error: TaskRunError): EnhanceError<TaskRunError> {
   switch (error.type) {
     case "BUILT_IN_ERROR": {
