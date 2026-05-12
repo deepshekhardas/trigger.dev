@@ -99,18 +99,12 @@ export async function action({ request, params }: ActionFunctionArgs) {
     if (error instanceof ServiceValidationError) {
       return json({ error: error.message }, { status: 422 });
     } else if (error instanceof Error) {
-      // Check for stream parsing errors
-      if (
-        error.message.includes("Invalid JSON") ||
-        error.message.includes("exceeds maximum size")
-      ) {
+      // Check for stream parsing errors (e.g. invalid JSON)
+      if (error.message.includes("Invalid JSON")) {
         return json({ error: error.message }, { status: 400 });
       }
 
-      return json(
-        { error: error.message },
-        { status: 500, headers: { "x-should-retry": "false" } }
-      );
+      return json({ error: error.message }, { status: 500 });
     }
 
     return json({ error: "Something went wrong" }, { status: 500 });

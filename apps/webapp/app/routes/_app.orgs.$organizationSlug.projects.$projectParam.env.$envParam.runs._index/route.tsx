@@ -20,9 +20,11 @@ import { InfoPanel } from "~/components/primitives/InfoPanel";
 import { NavBar, PageAccessories, PageTitle } from "~/components/primitives/PageHeader";
 import { Paragraph } from "~/components/primitives/Paragraph";
 import {
+  RESIZABLE_PANEL_ANIMATION,
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
+  collapsibleHandleClassName,
 } from "~/components/primitives/Resizable";
 import { SelectedItemsProvider } from "~/components/primitives/SelectedItemsProvider";
 import { ShortcutKey } from "~/components/primitives/ShortcutKey";
@@ -42,7 +44,7 @@ import { findProjectBySlug } from "~/models/project.server";
 import { findEnvironmentBySlug } from "~/models/runtimeEnvironment.server";
 import { getRunFiltersFromRequest } from "~/presenters/RunFilters.server";
 import { NextRunListPresenter } from "~/presenters/v3/NextRunListPresenter.server";
-import { clickhouseClient } from "~/services/clickhouseInstance.server";
+import { clickhouseFactory } from "~/services/clickhouse/clickhouseFactoryInstance.server";
 import {
   setRootOnlyFilterPreference,
   uiPreferencesStorage,
@@ -85,7 +87,8 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 
   const filters = await getRunFiltersFromRequest(request);
 
-  const presenter = new NextRunListPresenter($replica, clickhouseClient);
+  const clickhouse = await clickhouseFactory.getClickhouseForOrganization(project.organizationId, "standard");
+  const presenter = new NextRunListPresenter($replica, clickhouse);
   const list = presenter.call(project.organizationId, environment.id, {
     userId,
     projectId: project.id,
@@ -305,18 +308,32 @@ function RunsList({
           </>
         </div>
       </ResizablePanel>
-      {isShowingBulkActionInspector && (
-        <>
-          <ResizableHandle id="runs-handle" />
-          <ResizablePanel id="bulk-action-inspector" min="300px" default="400px" max="600px">
+      <ResizableHandle
+        id="runs-handle"
+        className={collapsibleHandleClassName(isShowingBulkActionInspector)}
+      />
+      <ResizablePanel
+        id="bulk-action-inspector"
+        default="400px"
+        min="400px"
+        max="600px"
+        className="overflow-hidden"
+        collapsible
+        collapsed={!isShowingBulkActionInspector}
+        onCollapseChange={() => {}}
+        collapsedSize="0px"
+        collapseAnimation={RESIZABLE_PANEL_ANIMATION}
+      >
+        <div className="h-full" style={{ minWidth: 400 }}>
+          {isShowingBulkActionInspector && (
             <CreateBulkActionInspector
               filters={filters}
               selectedItems={selectedItems}
               hasBulkActions={list.bulkActions.length > 0}
             />
-          </ResizablePanel>
-        </>
-      )}
+          )}
+        </div>
+      </ResizablePanel>
     </ResizablePanelGroup>
   );
 }

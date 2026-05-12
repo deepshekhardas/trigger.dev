@@ -5,8 +5,12 @@ import {
   defaultMachine as defaultMachineFromPlatform,
   machines as machinesFromPlatform,
   type BillingAlertsResult,
+  type CreatePrivateLinkConnectionBody,
   type Limits,
   type MachineCode,
+  type PrivateLinkConnection,
+  type PrivateLinkConnectionList,
+  type PrivateLinkRegionsResult,
   type ReportUsageResult,
   type SetPlanBody,
   type UpdateBillingAlertsRequest,
@@ -34,10 +38,7 @@ function initializeClient() {
       url: process.env.BILLING_API_URL,
       apiKey: process.env.BILLING_API_KEY,
     });
-    console.log(`🤑 Billing client initialized: ${process.env.BILLING_API_URL}`);
     return client;
-  } else {
-    console.log(`🤑 Billing client not initialized`);
   }
 }
 
@@ -69,6 +70,11 @@ function initializePlatformCache() {
       stores: [memory, redisCacheStore],
       fresh: 60_000 * 5, // 5 minutes
       stale: 60_000 * 10, // 10 minutes
+    }),
+    entitlement: new Namespace<ReportUsageResult>(ctx, {
+      stores: [memory, redisCacheStore],
+      fresh: 60_000, // serve without revalidation for 60s
+      stale: 120_000, // total TTL — fresh 0-60s, stale-revalidate 60-120s
     }),
   });
 
@@ -367,6 +373,7 @@ export async function setPlan(
       if (result.accepted) {
         // Invalidate billing cache since plan changed
         opts?.invalidateBillingCache?.(organization.id);
+        platformCache.entitlement.remove(organization.id).catch(() => {});
         return redirect(newProjectPath(organization, "You're on the Free plan."));
       } else {
         return redirectWithErrorMessage(
@@ -383,11 +390,13 @@ export async function setPlan(
     case "updated_subscription": {
       // Invalidate billing cache since subscription changed
       opts?.invalidateBillingCache?.(organization.id);
+      platformCache.entitlement.remove(organization.id).catch(() => {});
       return redirectWithSuccessMessage(callerPath, request, "Subscription updated successfully.");
     }
     case "canceled_subscription": {
       // Invalidate billing cache since subscription was canceled
       opts?.invalidateBillingCache?.(organization.id);
+      platformCache.entitlement.remove(organization.id).catch(() => {});
       return redirectWithSuccessMessage(callerPath, request, "Subscription canceled.");
     }
   }
@@ -405,6 +414,38 @@ export async function setConcurrencyAddOn(organizationId: string, amount: number
     return result;
   } catch (e) {
     logger.error("Error setting concurrency add on - caught error", { error: e });
+    return undefined;
+  }
+}
+
+export async function setSeatsAddOn(organizationId: string, amount: number) {
+  if (!client) return undefined;
+
+  try {
+    const result = await client.setAddOn(organizationId, { type: "seats", amount });
+    if (!result.success) {
+      logger.error("Error setting seats add on - no success", { error: result.error });
+      return undefined;
+    }
+    return result;
+  } catch (e) {
+    logger.error("Error setting seats add on - caught error", { error: e });
+    return undefined;
+  }
+}
+
+export async function setBranchesAddOn(organizationId: string, amount: number) {
+  if (!client) return undefined;
+
+  try {
+    const result = await client.setAddOn(organizationId, { type: "branches", amount });
+    if (!result.success) {
+      logger.error("Error setting branches add on - no success", { error: result.error });
+      return undefined;
+    }
+    return result;
+  } catch (e) {
+    logger.error("Error setting branches add on - caught error", { error: e });
     return undefined;
   }
 }
@@ -498,21 +539,34 @@ export async function getEntitlement(
 ): Promise<ReportUsageResult | undefined> {
   if (!client) return undefined;
 
-  try {
-    const result = await client.getEntitlement(organizationId);
-    if (!result.success) {
-      logger.error("Error getting entitlement - no success", { error: result.error });
-      return {
-        hasAccess: true as const,
-      };
+  // Errors must be caught inside the loader — @unkey/cache passes the loader
+  // promise to waitUntil() with no .catch(), so an unhandled rejection during
+  // background SWR revalidation would crash the process. Returning undefined
+  // on error tells SWR not to commit a fail-open value to the cache, which
+  // prevents transient billing errors from overwriting a legitimate
+  // hasAccess: false entry. The fail-open default is applied *outside* the
+  // SWR call so it never becomes a cached access decision.
+  const result = await platformCache.entitlement.swr(organizationId, async () => {
+    try {
+      const response = await client.getEntitlement(organizationId);
+      if (!response.success) {
+        logger.error("Error getting entitlement - no success", { error: response.error });
+        return undefined;
+      }
+      return response;
+    } catch (e) {
+      logger.error("Error getting entitlement - caught error", { error: e });
+      return undefined;
     }
-    return result;
-  } catch (e) {
-    logger.error("Error getting entitlement - caught error", { error: e });
+  });
+
+  if (result.err || result.val === undefined) {
     return {
       hasAccess: true as const,
     };
   }
+
+  return result.val;
 }
 
 export async function projectCreated(
@@ -608,6 +662,112 @@ export async function enqueueBuild(
   }
 
   return result;
+}
+
+export async function getPrivateLinks(
+  organizationId: string
+): Promise<PrivateLinkConnectionList | undefined> {
+  if (!client) return undefined;
+
+  const [error, result] = await tryCatch(client.getPrivateLinks(organizationId));
+
+  if (error) {
+    logger.error("Error getting private links", { organizationId, error });
+    return undefined;
+  }
+
+  if (!result.success) {
+    logger.error("Error getting private links - no success", { organizationId, error: result.error });
+    return undefined;
+  }
+
+  return result;
+}
+
+export async function createPrivateLink(
+  organizationId: string,
+  body: CreatePrivateLinkConnectionBody
+): Promise<PrivateLinkConnection | undefined> {
+  if (!client) throw new Error("Platform client not configured");
+
+  const [error, result] = await tryCatch(client.createPrivateLink(organizationId, body));
+
+  if (error) {
+    logger.error("Error creating private link", { organizationId, error });
+    throw error;
+  }
+
+  if (!result.success) {
+    logger.error("Error creating private link - no success", { organizationId, error: result.error });
+    throw new Error(result.error ?? "Failed to create private link");
+  }
+
+  return result;
+}
+
+export async function deletePrivateLink(
+  organizationId: string,
+  connectionId: string
+): Promise<void> {
+  if (!client) throw new Error("Platform client not configured");
+
+  const [error, result] = await tryCatch(client.deletePrivateLink(organizationId, connectionId));
+
+  if (error) {
+    logger.error("Error deleting private link", { organizationId, connectionId, error });
+    throw error;
+  }
+
+  if (!result.success) {
+    logger.error("Error deleting private link - no success", { organizationId, connectionId, error: result.error });
+    throw new Error(result.error ?? "Failed to delete private link");
+  }
+}
+
+export async function getPrivateLinkRegions(
+  organizationId: string
+): Promise<PrivateLinkRegionsResult | undefined> {
+  if (!client) return undefined;
+
+  const [error, result] = await tryCatch(client.getPrivateLinkRegions(organizationId));
+
+  if (error) {
+    logger.error("Error getting private link regions", { organizationId, error });
+    return undefined;
+  }
+
+  if (!result.success) {
+    logger.error("Error getting private link regions - no success", { organizationId, error: result.error });
+    return undefined;
+  }
+
+  return result;
+}
+
+export async function triggerInitialDeployment(
+  projectId: string,
+  options: { environment: "preview" | "prod" | "staging" }
+): Promise<void> {
+  if (!client) return;
+
+  const [error, result] = await tryCatch(client.triggerInitialDeployment(projectId, options));
+
+  if (error) {
+    logger.warn("Error triggering initial deployment", {
+      projectId,
+      environment: options.environment,
+      error,
+    });
+    return;
+  }
+
+  if (!result.success) {
+    logger.warn("Failed to trigger initial deployment", {
+      projectId,
+      environment: options.environment,
+      error: result.error,
+    });
+  }
 }
 
 function isCloud(): boolean {

@@ -485,10 +485,22 @@ export const FinalizeDeploymentRequestBody = z.object({
 
 export type FinalizeDeploymentRequestBody = z.infer<typeof FinalizeDeploymentRequestBody>;
 
+export const BuildServerMetadata = z.object({
+  buildId: z.string().optional(),
+  isNativeBuild: z.boolean().optional(),
+  artifactKey: z.string().optional(),
+  skipPromotion: z.boolean().optional(),
+  configFilePath: z.string().optional(),
+  skipEnqueue: z.boolean().optional(),
+});
+
+export type BuildServerMetadata = z.infer<typeof BuildServerMetadata>;
+
 export const ProgressDeploymentRequestBody = z.object({
   contentHash: z.string().optional(),
   gitMeta: GitMeta.optional(),
   runtime: z.string().optional(),
+  buildServerMetadata: BuildServerMetadata.optional(),
 });
 
 export type ProgressDeploymentRequestBody = z.infer<typeof ProgressDeploymentRequestBody>;
@@ -528,15 +540,8 @@ export const DeploymentTriggeredVia = z
 
 export type DeploymentTriggeredVia = z.infer<typeof DeploymentTriggeredVia>;
 
-export const BuildServerMetadata = z.object({
-  buildId: z.string().optional(),
-  isNativeBuild: z.boolean().optional(),
-  artifactKey: z.string().optional(),
-  skipPromotion: z.boolean().optional(),
-  configFilePath: z.string().optional(),
-});
-
-export type BuildServerMetadata = z.infer<typeof BuildServerMetadata>;
+// TriggerSource, TriggerAction, and RunAnnotations are defined in runEngine.ts
+// They are re-exported through the schemas barrel (index.ts)
 
 export const UpsertBranchRequestBody = z.object({
   git: GitMeta.optional(),
@@ -590,41 +595,54 @@ export const InitializeDeploymentResponseBody = z.object({
 
 export type InitializeDeploymentResponseBody = z.infer<typeof InitializeDeploymentResponseBody>;
 
-export const InitializeDeploymentRequestBody = z
-  .object({
-    contentHash: z.string(),
-    userId: z.string().optional(),
-    /** @deprecated This is now determined by the webapp. This is only used to warn users with old CLI versions. */
-    selfHosted: z.boolean().optional(),
-    gitMeta: GitMeta.optional(),
-    type: z.enum(["MANAGED", "UNMANAGED", "V1"]).optional(),
-    runtime: z.string().optional(),
-    initialStatus: z.enum(["PENDING", "BUILDING"]).optional(),
-    triggeredVia: DeploymentTriggeredVia.optional(),
-    buildId: z.string().optional(),
-  })
-  .and(
-    z.preprocess(
-      (val) => {
-        const obj = val as any;
-        if (!obj || !obj.isNativeBuild) {
-          return { ...obj, isNativeBuild: false };
-        }
-        return obj;
-      },
-      z.discriminatedUnion("isNativeBuild", [
-        z.object({
-          isNativeBuild: z.literal(true),
-          skipPromotion: z.boolean(),
-          artifactKey: z.string(),
-          configFilePath: z.string().optional(),
-        }),
-        z.object({
-          isNativeBuild: z.literal(false),
-        }),
-      ])
-    )
-  );
+const InitializeDeploymentRequestBodyBase = z.object({
+  contentHash: z.string(),
+  userId: z.string().optional(),
+  /** @deprecated This is now determined by the webapp. This is only used to warn users with old CLI versions. */
+  selfHosted: z.boolean().optional(),
+  gitMeta: GitMeta.optional(),
+  type: z.enum(["MANAGED", "UNMANAGED", "V1"]).optional(),
+  runtime: z.string().optional(),
+  initialStatus: z.enum(["PENDING", "BUILDING"]).optional(),
+  isLocalBuild: z.boolean().optional(),
+  triggeredVia: DeploymentTriggeredVia.optional(),
+  buildId: z.string().optional(),
+});
+type BaseOutput = z.output<typeof InitializeDeploymentRequestBodyBase>;
+
+type NativeBuildOutput = BaseOutput & {
+  isNativeBuild: true;
+  skipPromotion?: boolean;
+  artifactKey?: string;
+  configFilePath?: string;
+  skipEnqueue?: boolean;
+};
+
+type NonNativeBuildOutput = BaseOutput & {
+  isNativeBuild: false;
+  skipPromotion?: never;
+  artifactKey?: never;
+  configFilePath?: never;
+  skipEnqueue?: never;
+};
+
+const InitializeDeploymentRequestBodyFull = InitializeDeploymentRequestBodyBase.extend({
+  isNativeBuild: z.boolean().default(false),
+  skipPromotion: z.boolean().optional(),
+  artifactKey: z.string().optional(),
+  configFilePath: z.string().optional(),
+  skipEnqueue: z.boolean().optional().default(false),
+});
+
+export const InitializeDeploymentRequestBody = InitializeDeploymentRequestBodyFull.transform(
+  (data): NativeBuildOutput | NonNativeBuildOutput => {
+    if (data.isNativeBuild) {
+      return { ...data, isNativeBuild: true as const };
+    }
+    const { skipPromotion, artifactKey, configFilePath, skipEnqueue, ...rest } = data;
+    return { ...rest, isNativeBuild: false as const };
+  }
+);
 
 export type InitializeDeploymentRequestBody = z.infer<typeof InitializeDeploymentRequestBody>;
 
@@ -694,6 +712,7 @@ export const GetDeploymentResponseBody = z.object({
   version: z.string(),
   imageReference: z.string().nullish(),
   imagePlatform: z.string(),
+  commitSHA: z.string().nullish(),
   externalBuildData: ExternalBuildData.optional().nullable(),
   errorData: DeploymentErrorData.nullish(),
   worker: z
@@ -710,6 +729,17 @@ export const GetDeploymentResponseBody = z.object({
       ),
     })
     .optional(),
+  integrationDeployments: z
+    .array(
+      z.object({
+        id: z.string(),
+        integrationName: z.string(),
+        integrationDeploymentId: z.string(),
+        commitSHA: z.string(),
+        createdAt: z.coerce.date(),
+      })
+    )
+    .nullish(),
 });
 
 export type GetDeploymentResponseBody = z.infer<typeof GetDeploymentResponseBody>;
@@ -758,6 +788,8 @@ export const DeploymentEventFromString = z
 
 export const CreateUploadPayloadUrlResponseBody = z.object({
   presignedUrl: z.string(),
+  /** Present on `/api/v2/packets` PUT (upload handshake); omitted on v1 GET download presign. */
+  storagePath: z.string().optional(),
 });
 
 export const WorkersListResponseBody = z
@@ -810,6 +842,17 @@ export const DevDequeueResponseBody = z.object({
   dequeuedMessages: DequeuedMessage.array(),
 });
 export type DevDequeueResponseBody = z.infer<typeof DevDequeueResponseBody>;
+
+export const DevDisconnectRequestBody = z.object({
+  runFriendlyIds: z.string().array(),
+});
+export type DevDisconnectRequestBody = z.infer<typeof DevDisconnectRequestBody>;
+
+export const DevDisconnectResponseBody = z.object({
+  cancelled: z.number(),
+  bulkActionId: z.string().optional(),
+});
+export type DevDisconnectResponseBody = z.infer<typeof DevDisconnectResponseBody>;
 
 export type CreateUploadPayloadUrlResponseBody = z.infer<typeof CreateUploadPayloadUrlResponseBody>;
 
@@ -1139,6 +1182,12 @@ export const ImportEnvironmentVariablesRequestBody = z.object({
   variables: z.record(z.string()),
   parentVariables: z.record(z.string()).optional(),
   override: z.boolean().optional(),
+  source: z
+    .discriminatedUnion("type", [
+      z.object({ type: z.literal("user"), userId: z.string() }),
+      z.object({ type: z.literal("integration"), integration: z.string() }),
+    ])
+    .optional(),
 });
 
 export type ImportEnvironmentVariablesRequestBody = z.infer<
@@ -1337,6 +1386,31 @@ export const CreateWaitpointTokenResponseBody = z.object({
 });
 export type CreateWaitpointTokenResponseBody = z.infer<typeof CreateWaitpointTokenResponseBody>;
 
+export const CreateInputStreamWaitpointRequestBody = z.object({
+  streamId: z.string(),
+  timeout: z.string().optional(),
+  idempotencyKey: z.string().optional(),
+  idempotencyKeyTTL: z.string().optional(),
+  tags: z.union([z.string(), z.array(z.string())]).optional(),
+  /**
+   * The last S2 sequence number the client has seen on this input stream.
+   * Used to check for data that arrived before .wait() was called.
+   * If undefined, the server checks from the beginning of the stream.
+   */
+  lastSeqNum: z.number().optional(),
+});
+export type CreateInputStreamWaitpointRequestBody = z.infer<
+  typeof CreateInputStreamWaitpointRequestBody
+>;
+
+export const CreateInputStreamWaitpointResponseBody = z.object({
+  waitpointId: z.string(),
+  isCached: z.boolean(),
+});
+export type CreateInputStreamWaitpointResponseBody = z.infer<
+  typeof CreateInputStreamWaitpointResponseBody
+>;
+
 export const waitpointTokenStatuses = ["WAITING", "COMPLETED", "TIMED_OUT"] as const;
 export const WaitpointTokenStatus = z.enum(waitpointTokenStatuses);
 export type WaitpointTokenStatus = z.infer<typeof WaitpointTokenStatus>;
@@ -1481,8 +1555,8 @@ export const ApiDeploymentListResponseItem = z.object({
   createdAt: z.coerce.date(),
   shortCode: z.string(),
   version: z.string(),
-  runtime: z.string(),
-  runtimeVersion: z.string(),
+  runtime: z.string().nullable(),
+  runtimeVersion: z.string().nullable(),
   status: z.enum([
     "PENDING",
     "BUILDING",
@@ -1555,6 +1629,54 @@ export const RetrieveRunTraceResponseBody = z.object({
 
 export type RetrieveRunTraceResponseBody = z.infer<typeof RetrieveRunTraceResponseBody>;
 
+export const RetrieveSpanDetailResponseBody = z.object({
+  spanId: z.string(),
+  parentId: z.string().nullable(),
+  runId: z.string(),
+  message: z.string(),
+  isError: z.boolean(),
+  isPartial: z.boolean(),
+  isCancelled: z.boolean(),
+  level: z.string(),
+  startTime: z.coerce.date(),
+  durationMs: z.number(),
+  properties: z.record(z.any()).optional(),
+  events: z.array(z.any()).optional(),
+  entityType: z.string().optional(),
+  ai: z
+    .object({
+      model: z.string(),
+      provider: z.string(),
+      operationName: z.string(),
+      inputTokens: z.number(),
+      outputTokens: z.number(),
+      totalTokens: z.number(),
+      cachedTokens: z.number().optional(),
+      reasoningTokens: z.number().optional(),
+      inputCost: z.number().optional(),
+      outputCost: z.number().optional(),
+      totalCost: z.number().optional(),
+      tokensPerSecond: z.number().optional(),
+      msToFirstChunk: z.number().optional(),
+      durationMs: z.number(),
+      finishReason: z.string().optional(),
+      responseText: z.string().optional(),
+    })
+    .optional(),
+  triggeredRuns: z
+    .array(
+      z.object({
+        runId: z.string(),
+        taskIdentifier: z.string(),
+        status: z.string(),
+        createdAt: z.coerce.date(),
+      })
+    )
+    .optional(),
+});
+
+export type RetrieveSpanDetailResponseBody = z.infer<typeof RetrieveSpanDetailResponseBody>;
+
 export const CreateStreamResponseBody = z.object({
   version: z.string(),
 });
@@ -1565,3 +1687,96 @@ export const AppendToStreamResponseBody = z.object({
   message: z.string().optional(),
 });
 export type AppendToStreamResponseBody = z.infer<typeof AppendToStreamResponseBody>;
+
+export const SendInputStreamResponseBody = z.object({
+  ok: z.boolean(),
+});
+export type SendInputStreamResponseBody = z.infer<typeof SendInputStreamResponseBody>;
+
+export const ResolvePromptRequestBody = z.object({
+  variables: z.record(z.unknown()).default({}),
+  label: z.string().optional(),
+  version: z.number().optional(),
+});
+export type ResolvePromptRequestBody = z.infer<typeof ResolvePromptRequestBody>;
+
+export const ResolvePromptResponseBody = z.object({
+  data: z.object({
+    promptId: z.string(),
+    slug: z.string(),
+    version: z.number(),
+    labels: z.array(z.string()),
+    template: z.string().optional(),
+    text: z.string().optional(),
+    model: z.string().optional().nullable(),
+    config: z.record(z.unknown()).optional().nullable(),
+  }),
+});
+export type ResolvePromptResponseBody = z.infer<typeof ResolvePromptResponseBody>;
+
+export const ListPromptsResponseBody = z.object({
+  data: z.array(
+    z.object({
+      slug: z.string(),
+      friendlyId: z.string(),
+      description: z.string().nullable(),
+      tags: z.array(z.string()),
+      defaultModel: z.string().nullable(),
+      currentVersion: z.number().nullable(),
+      hasOverride: z.boolean(),
+      updatedAt: z.string(),
+    })
+  ),
+});
+export type ListPromptsResponseBody = z.infer<typeof ListPromptsResponseBody>;
+
+export const ListPromptVersionsResponseBody = z.object({
+  data: z.array(
+    z.object({
+      id: z.string(),
+      version: z.number(),
+      labels: z.array(z.string()),
+      source: z.string(),
+      model: z.string().nullable(),
+      textContent: z.string().nullable(),
+      commitMessage: z.string().nullable(),
+      contentHash: z.string(),
+      createdAt: z.string(),
+    })
+  ),
+});
+export type ListPromptVersionsResponseBody = z.infer<typeof ListPromptVersionsResponseBody>;
+
+export const PromotePromptVersionRequestBody = z.object({
+  version: z.number().int().positive(),
+});
+export type PromotePromptVersionRequestBody = z.infer<typeof PromotePromptVersionRequestBody>;
+
+export const CreatePromptOverrideRequestBody = z.object({
+  textContent: z.string(),
+  model: z.string().optional(),
+  commitMessage: z.string().optional(),
+  source: z.string().optional(),
+});
+export type CreatePromptOverrideRequestBody = z.infer<typeof CreatePromptOverrideRequestBody>;
+
+export const UpdatePromptOverrideRequestBody = z.object({
+  textContent: z.string().optional(),
+  model: z.string().optional(),
+  commitMessage: z.string().optional(),
+});
+export type UpdatePromptOverrideRequestBody = z.infer<typeof UpdatePromptOverrideRequestBody>;
+
+export const ReactivatePromptOverrideRequestBody = z.object({
+  version: z.number().int().positive(),
+});
+export type ReactivatePromptOverrideRequestBody = z.infer<typeof ReactivatePromptOverrideRequestBody>;
+
+export const PromptOkResponseBody = z.object({ ok: z.boolean() });
+export type PromptOkResponseBody = z.infer<typeof PromptOkResponseBody>;
+
+export const PromptOverrideCreatedResponseBody = z.object({
+  ok: z.boolean(),
+  version: z.number(),
+});
+export type PromptOverrideCreatedResponseBody = z.infer<typeof PromptOverrideCreatedResponseBody>;

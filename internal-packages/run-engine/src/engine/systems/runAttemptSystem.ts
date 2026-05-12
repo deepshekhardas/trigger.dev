@@ -402,6 +402,7 @@ export class RunAttemptSystem {
                   status: "EXECUTING",
                   attemptNumber: nextAttemptNumber,
                   executedAt: taskRun.attemptNumber === null ? new Date() : undefined,
+                  isWarmStart: isWarmStart ?? false,
                 },
                 select: {
                   id: true,
@@ -799,16 +800,15 @@ export class RunAttemptSystem {
             },
           });
 
-          if (!run.associatedWaitpoint) {
-            throw new ServiceValidationError("No associated waitpoint found", 400);
+          // Complete the waitpoint if it exists (runs without waiting parents have no waitpoint)
+          if (run.associatedWaitpoint) {
+            await this.waitpointSystem.completeWaitpoint({
+              id: run.associatedWaitpoint.id,
+              output: completion.output
+                ? { value: completion.output, type: completion.outputType, isError: false }
+                : undefined,
+            });
           }
-
-          await this.waitpointSystem.completeWaitpoint({
-            id: run.associatedWaitpoint.id,
-            output: completion.output
-              ? { value: completion.output, type: completion.outputType, isError: false }
-              : undefined,
-          });
 
           this.$.eventBus.emit("runSucceeded", {
             time: completedAt,
@@ -1437,35 +1437,39 @@ export class RunAttemptSystem {
         });
 
         //if executing, we need to message the worker to cancel the run and put it into `PENDING_CANCEL` status
+        //unless finalizeRun is true (worker is known to be dead), in which case skip straight to FINISHED
         if (
           isExecuting(latestSnapshot.executionStatus) ||
           isPendingExecuting(latestSnapshot.executionStatus)
         ) {
-          const newSnapshot = await this.executionSnapshotSystem.createExecutionSnapshot(prisma, {
-            run,
-            snapshot: {
-              executionStatus: "PENDING_CANCEL",
-              description: "Run was cancelled",
-            },
-            previousSnapshotId: latestSnapshot.id,
-            environmentId: latestSnapshot.environmentId,
-            environmentType: latestSnapshot.environmentType,
-            projectId: latestSnapshot.projectId,
-            organizationId: latestSnapshot.organizationId,
-            workerId,
-            runnerId,
-          });
+          if (!finalizeRun) {
+            const newSnapshot = await this.executionSnapshotSystem.createExecutionSnapshot(prisma, {
+              run,
+              snapshot: {
+                executionStatus: "PENDING_CANCEL",
+                description: "Run was cancelled",
+              },
+              previousSnapshotId: latestSnapshot.id,
+              environmentId: latestSnapshot.environmentId,
+              environmentType: latestSnapshot.environmentType,
+              projectId: latestSnapshot.projectId,
+              organizationId: latestSnapshot.organizationId,
+              workerId,
+              runnerId,
+            });
 
-          //the worker needs to be notified so it can kill the run and complete the attempt
-          await sendNotificationToWorker({
-            runId,
-            snapshot: newSnapshot,
-            eventBus: this.$.eventBus,
-          });
-          return {
-            alreadyFinished: false,
-            ...executionResultFromSnapshot(newSnapshot),
-          };
+            //the worker needs to be notified so it can kill the run and complete the attempt
+            await sendNotificationToWorker({
+              runId,
+              snapshot: newSnapshot,
+              eventBus: this.$.eventBus,
+            });
+            return {
+              alreadyFinished: false,
+              ...executionResultFromSnapshot(newSnapshot),
+            };
+          }
+          // finalizeRun is true — fall through to finish the run immediately
         }
 
         //not executing, so we will actually finish the run
@@ -1484,15 +1488,13 @@ export class RunAttemptSystem {
           runnerId,
         });
 
-        if (!run.associatedWaitpoint) {
-          throw new ServiceValidationError("No associated waitpoint found", 400);
+        // Complete the waitpoint if it exists (runs without waiting parents have no waitpoint)
+        if (run.associatedWaitpoint) {
+          await this.waitpointSystem.completeWaitpoint({
+            id: run.associatedWaitpoint.id,
+            output: { value: JSON.stringify(error), isError: true },
+          });
         }
-
-        //complete the waitpoint so the parent run can continue
-        await this.waitpointSystem.completeWaitpoint({
-          id: run.associatedWaitpoint.id,
-          output: { value: JSON.stringify(error), isError: true },
-        });
 
         await this.#finalizeRun(run);
 
@@ -1652,18 +1654,17 @@ export class RunAttemptSystem {
         runnerId,
       });
 
-      if (!run.associatedWaitpoint) {
-        throw new ServiceValidationError("No associated waitpoint found", 400);
-      }
-
       await this.$.runQueue.acknowledgeMessage(run.runtimeEnvironment.organizationId, runId, {
         removeFromWorkerQueue: true,
       });
 
-      await this.waitpointSystem.completeWaitpoint({
-        id: run.associatedWaitpoint.id,
-        output: { value: JSON.stringify(truncatedError), isError: true },
-      });
+      // Complete the waitpoint if it exists (runs without waiting parents have no waitpoint)
+      if (run.associatedWaitpoint) {
+        await this.waitpointSystem.completeWaitpoint({
+          id: run.associatedWaitpoint.id,
+          output: { value: JSON.stringify(truncatedError), isError: true },
+        });
+      }
 
       this.$.eventBus.emit("runFailed", {
         time: failedAt,
@@ -1897,10 +1898,11 @@ export class RunAttemptSystem {
         });
 
       if (!queue) {
-        throw new ServiceValidationError(
-          `Could not resolve queue data for queue ${params.queueName}`,
-          404
-        );
+        // Return synthetic queue so run/span view still loads (e.g. createFailedTaskRun with fallback queue)
+        return {
+          id: params.queueName,
+          name: params.queueName,
+        };
       }
 
       return {
