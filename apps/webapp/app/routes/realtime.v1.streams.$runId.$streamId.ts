@@ -1,6 +1,7 @@
 import { type ActionFunctionArgs } from "@remix-run/server-runtime";
 import { z } from "zod";
 import { $replica } from "~/db.server";
+import { getRequestAbortSignal } from "~/services/httpAsyncStorage.server";
 import { getRealtimeStreamInstance } from "~/services/realtime/v1StreamsGlobal.server";
 import { createLoaderApiRoute } from "~/services/routeBuilders/apiBuilder.server";
 import { AuthenticatedEnvironment } from "~/services/apiAuth.server";
@@ -28,6 +29,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
     select: {
       id: true,
       friendlyId: true,
+      streamBasinName: true,
       runtimeEnvironment: {
         include: {
           project: true,
@@ -63,7 +65,9 @@ export async function action({ request, params }: ActionFunctionArgs) {
   }
 
   // The runtimeEnvironment from the run is already in the correct shape for AuthenticatedEnvironment
-  const realtimeStream = getRealtimeStreamInstance(run.runtimeEnvironment, streamVersion);
+  const realtimeStream = getRealtimeStreamInstance(run.runtimeEnvironment, streamVersion, {
+    run,
+  });
 
   return realtimeStream.ingestData(
     request.body,
@@ -80,7 +84,7 @@ export const loader = createLoaderApiRoute(
     allowJWT: true,
     corsStrategy: "all",
     findResource: async (params, auth) => {
-      return $replica.taskRun.findFirst({
+      const run = await $replica.taskRun.findFirst({
         where: {
           friendlyId: params.runId,
           runtimeEnvironmentId: auth.environment.id,
@@ -93,6 +97,7 @@ export const loader = createLoaderApiRoute(
           },
         },
       });
+      return run;
     },
     authorization: {
       action: "read",
@@ -126,10 +131,11 @@ export const loader = createLoaderApiRoute(
 
     const realtimeStream = getRealtimeStreamInstance(
       authentication.environment,
-      run.realtimeStreamsVersion
+      run.realtimeStreamsVersion,
+      { run }
     );
 
-    return realtimeStream.streamResponse(request, run.friendlyId, params.streamId, request.signal, {
+    return realtimeStream.streamResponse(request, run.friendlyId, params.streamId, getRequestAbortSignal(), {
       lastEventId,
       timeoutInSeconds,
     });

@@ -228,6 +228,31 @@ export function BulkActionFilterSummary({
                     />
                   );
                 }
+                case "errorId": {
+                  return (
+                    <AppliedFilter
+                      variant="minimal/medium"
+                      key={key}
+                      label={"Error ID"}
+                      icon={filterIcon(key)}
+                      value={value}
+                      removable={false}
+                    />
+                  );
+                }
+                case "sources": {
+                  const values = Array.isArray(value) ? value : [`${value}`];
+                  return (
+                    <AppliedFilter
+                      variant="minimal/medium"
+                      key={key}
+                      label={filterTitle(key)}
+                      icon={filterIcon(key)}
+                      value={appliedSummary(values)}
+                      removable={false}
+                    />
+                  );
+                }
                 default: {
                   assertNever(typedKey);
                 }

@@ -1,5 +1,6 @@
 import { type ClickHouse } from "@internal/clickhouse";
 import { MachinePresetName } from "@trigger.dev/core/v3";
+import { RunAnnotations } from "@trigger.dev/core/v3/schemas";
 import {
   type PrismaClient,
   type PrismaClientOrTransaction,
@@ -8,7 +9,7 @@ import {
 import { type Direction } from "~/components/ListPagination";
 import { timeFilters } from "~/components/runs/v3/SharedFilters";
 import { findDisplayableEnvironment } from "~/models/runtimeEnvironment.server";
-import { getAllTaskIdentifiers } from "~/models/task.server";
+import { getTaskIdentifiers } from "~/models/task.server";
 import { RunsRepository } from "~/services/runsRepository/runsRepository.server";
 import { machinePresetFromRun } from "~/v3/machinePresets.server";
 import { ServiceValidationError } from "~/v3/services/baseService.server";
@@ -33,6 +34,8 @@ export type RunListOptions = {
   runId?: string[];
   queues?: string[];
   machines?: MachinePresetName[];
+  errorId?: string;
+  sources?: string[];
   //pagination
   direction?: Direction;
   cursor?: string;
@@ -70,6 +73,8 @@ export class NextRunListPresenter {
       runId,
       queues,
       machines,
+      errorId,
+      sources,
       from,
       to,
       direction = "forward",
@@ -87,6 +92,7 @@ export class NextRunListPresenter {
     const hasStatusFilters = statuses && statuses.length > 0;
 
     const hasFilters =
+      (sources !== undefined && sources.length > 0) ||
       (tasks !== undefined && tasks.length > 0) ||
       (versions !== undefined && versions.length > 0) ||
       hasStatusFilters ||
@@ -97,12 +103,13 @@ export class NextRunListPresenter {
       (runId !== undefined && runId.length > 0) ||
       (queues !== undefined && queues.length > 0) ||
       (machines !== undefined && machines.length > 0) ||
+      (errorId !== undefined && errorId !== "") ||
       typeof isTest === "boolean" ||
       rootOnly === true ||
       !time.isDefault;
 
     //get all possible tasks
-    const possibleTasksAsync = getAllTaskIdentifiers(this.replica, environmentId);
+    const possibleTasksAsync = getTaskIdentifiers(environmentId);
 
     //get possible bulk actions
     const bulkActionsAsync = this.replica.bulkActionGroup.findMany({
@@ -182,6 +189,8 @@ export class NextRunListPresenter {
       bulkId,
       queues,
       machines,
+      errorId,
+      taskKinds: sources,
       page: {
         size: pageSize,
         cursor,
@@ -246,17 +255,14 @@ export class NextRunListPresenter {
             name: run.queue.replace("task/", ""),
             type: run.queue.startsWith("task/") ? "task" : "custom",
           },
+          taskKind: RunAnnotations.safeParse(run.annotations).data?.taskKind ?? "STANDARD",
         };
       }),
       pagination: {
         next: pagination.nextCursor ?? undefined,
         previous: pagination.previousCursor ?? undefined,
       },
-      possibleTasks: possibleTasks
-        .map((task) => ({ slug: task.slug, triggerSource: task.triggerSource }))
-        .sort((a, b) => {
-          return a.slug.localeCompare(b.slug);
-        }),
+      possibleTasks,
       bulkActions: bulkActions.map((bulkAction) => ({
         id: bulkAction.friendlyId,
         type: bulkAction.type,
