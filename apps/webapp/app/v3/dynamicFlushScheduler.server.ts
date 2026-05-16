@@ -52,7 +52,7 @@ export class DynamicFlushScheduler<T> {
   private readonly isDroppableEvent?: (item: T) => boolean;
   private isLoadShedding: boolean = false;
 
-  private readonly logger: Logger = new Logger("EventRepo.DynamicFlushScheduler", "debug");
+  private readonly logger: Logger = new Logger("EventRepo.DynamicFlushScheduler", "info");
 
   constructor(config: DynamicFlushSchedulerConfig<T>) {
     this.batchQueue = [];
@@ -193,14 +193,13 @@ export class DynamicFlushScheduler<T> {
 
     if (batchesToFlush.length === 0) return;
 
-    // Schedule all batches for concurrent processing
+// Schedule all batches for concurrent processing
     const flushPromises = batchesToFlush.map((batch) =>
       this.limiter(async () => {
-        const itemCount = batch.length;
-
         const self = this;
 
         async function tryFlush(flushId: string, batchToFlush: T[], attempt: number = 1) {
+          const itemCount = batchToFlush.length;
           try {
             const startTime = Date.now();
             await self.callback(flushId, batchToFlush);
@@ -329,7 +328,7 @@ export class DynamicFlushScheduler<T> {
         droppedByKind[kind] = count;
       });
 
-      this.logger.info("DynamicFlushScheduler metrics", {
+      this.logger.debug("DynamicFlushScheduler metrics", {
         totalQueuedItems: this.totalQueuedItems,
         batchQueueLength: this.batchQueue.length,
         currentBatchLength: this.currentBatch.length,
