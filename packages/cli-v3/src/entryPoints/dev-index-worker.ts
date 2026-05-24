@@ -14,7 +14,7 @@ import {
 } from "@trigger.dev/core/v3/workers";
 import { sendMessageInCatalog, ZodSchemaParsedError } from "@trigger.dev/core/v3/zodMessageHandler";
 import { readFile } from "node:fs/promises";
-import { installSourceMapSupport } from "../utilities/sourceMaps.js";
+import { installSourceMapSupport } from "../utilities/installSourceMapSupport.js";
 import { registerResources } from "../indexing/registerResources.js";
 import { env } from "std-env";
 import { normalizeImportPath } from "../utilities/normalizeImportPath.js";
