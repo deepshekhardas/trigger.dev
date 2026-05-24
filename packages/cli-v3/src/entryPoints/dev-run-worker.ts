@@ -47,6 +47,7 @@ import {
   SharedRuntimeManager,
   OtelTaskLogger,
   populateEnv,
+  NO_FILE_CONTEXT,
   StandardLifecycleHooksManager,
   StandardLocalsManager,
   StandardMetadataManager,
@@ -67,7 +68,7 @@ import {
 import { ZodIpcConnection } from "@trigger.dev/core/v3/zodIpc";
 import { readFile } from "node:fs/promises";
 import { setInterval, setTimeout } from "node:timers/promises";
-import { installSourceMapSupport } from "../utilities/sourceMaps.js";
+import { installSourceMapSupport } from "../utilities/installSourceMapSupport.js";
 import { env } from "std-env";
 import { normalizeImportPath } from "../utilities/normalizeImportPath.js";
 import { VERSION } from "../version.js";
@@ -125,8 +126,9 @@ process.on("uncaughtException", function (error, origin) {
   }
 });
 
-process.title = `trigger-dev-run-worker (${getEnvVar("TRIGGER_WORKER_VERSION") ?? "unknown version"
-  })`;
+process.title = `trigger-dev-run-worker (${
+  getEnvVar("TRIGGER_WORKER_VERSION") ?? "unknown version"
+})`;
 
 const heartbeatIntervalMs = getEnvVar("HEARTBEAT_INTERVAL_MS");
 
@@ -171,7 +173,7 @@ const standardRealtimeStreamsManager = new StandardRealtimeStreamsManager(
   apiClientManager.clientOrThrow(),
   getEnvVar("TRIGGER_STREAM_URL", getEnvVar("TRIGGER_API_URL")) ?? "https://api.trigger.dev",
   (getEnvVar("TRIGGER_STREAMS_DEBUG") === "1" || getEnvVar("TRIGGER_STREAMS_DEBUG") === "true") ??
-  false
+    false
 );
 realtimeStreams.setGlobalManager(standardRealtimeStreamsManager);
 
@@ -322,12 +324,12 @@ async function doBootstrap() {
 
 let bootstrapCache:
   | {
-    tracer: TriggerTracer;
-    tracingSDK: TracingSDK;
-    consoleInterceptor: ConsoleInterceptor;
-    config: TriggerConfig;
-    workerManifest: WorkerManifest;
-  }
+      tracer: TriggerTracer;
+      tracingSDK: TracingSDK;
+      consoleInterceptor: ConsoleInterceptor;
+      config: TriggerConfig;
+      workerManifest: WorkerManifest;
+    }
   | undefined;
 
 async function bootstrap() {
@@ -496,8 +498,8 @@ const zodIpc = new ZodIpcConnection({
               async () => {
                 const beforeImport = performance.now();
                 resourceCatalog.setCurrentFileContext(
-                  taskManifest.entryPoint,
-                  taskManifest.filePath
+                  taskManifest.filePath,
+                  taskManifest.entryPoint
                 );
 
                 // Load init file if it exists
@@ -605,6 +607,12 @@ const zodIpc = new ZodIpcConnection({
 
           const signal = AbortSignal.any([_cancelController.signal, timeoutController.signal]);
 
+          // Sentinel context so `task()` calls firing during run / lifecycle
+          // hooks (e.g. via `await import(...)` of a module containing a task
+          // definition) register normally instead of being silently dropped.
+          // Cleared in the surrounding finally below.
+          resourceCatalog.setCurrentFileContext(NO_FILE_CONTEXT, NO_FILE_CONTEXT);
+
           const { result } = await executor.execute(execution, ctx, signal);
 
           if (_isRunning && !_isCancelled) {
@@ -623,6 +631,7 @@ const zodIpc = new ZodIpcConnection({
           }
         } finally {
           standardHeartbeatsManager.stopHeartbeat();
+          resourceCatalog.clearCurrentFileContext();
 
           _execution = undefined;
           _isRunning = false;
