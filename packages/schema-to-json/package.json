@@ -53,7 +53,7 @@
     "superstruct": "^2.0.2",
     "tshy": "^3.0.2",
     "@sinclair/typebox": "^0.34.3",
-    "valibot": "^1.1.0",
+    "valibot": "^1.4.2",
     "yup": "^1.7.0",
     "rimraf": "6.0.1",
     "@arethetypeswrong/cli": "^0.15.4"
